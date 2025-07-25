@@ -1,0 +1,133 @@
+name: workflow
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 9999
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+      continue-on-error: true
+
+    - name: Setup
+      shell: pwsh
+      run: |
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+
+        net user administrator ${{ secrets.ADMIN_PASSWORD }} /add
+        net localgroup administrators administrator /add
+      continue-on-error: true
+
+    - name: . 
+      shell: pwsh
+      run: |
+        $WshShell = New-Object -comObject WScript.Shell
+        $Shortcut = $WshShell.CreateShortcut("C:\Users\Public\Desktop\Chrome_Reddit.lnk")
+        $Shortcut.TargetPath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+        $Shortcut.Arguments = "--no-first-run https://reddit.com https://guerrillamail.com"
+        $Shortcut.Save()
+      continue-on-error: true
+
+    - name: .
+      shell: pwsh
+      run: |
+        Expand-Archive nssm-2.24.zip -DestinationPath .\nssm
+        $nssmDir = Get-ChildItem -Path .\nssm -Directory | Select-Object -First 1
+        $nssmExe = Get-ChildItem -Path $nssmDir.FullName -Filter nssm.exe -Recurse | Select-Object -First 1
+        Copy-Item -Path $nssmExe.FullName -Destination .\nssm.exe
+      continue-on-error: true
+
+    - name: .
+      shell: pwsh
+      run: |
+        .\nssm.exe install cloudflared $PWD\cloudflared.exe "tunnel --url rdp://localhost:3389"
+        .\nssm.exe set cloudflared AppDirectory $PWD
+        .\nssm.exe set cloudflared AppExit Default Restart
+        .\nssm.exe set cloudflared AppStdout $PWD\cloudflared-log.log
+        .\nssm.exe set cloudflared AppStderr $PWD\cloudflared-log.log
+        .\nssm.exe start cloudflared
+      continue-on-error: true
+
+    - name: Get Connection command
+      shell: pwsh
+      run: |
+        $found = $false
+        while (-not $found) {
+          Start-Sleep -Milliseconds 100
+          $logContent = Get-Content "$PWD\cloudflared-log.log" -Raw
+          if ($logContent -match "(https://[a-zA-Z0-9-]+\.trycloudflare\.com)") {
+            $tunnelURL = $matches[1]
+            $found = $true
+          }
+        }
+        Write-Host "Tunnel URL: $tunnelURL"
+        Write-Host "Connection command: cloudflared access rdp --url rdp://localhost:33892 --hostname $tunnelURL"
+      continue-on-error: true
+
+
+
+    - name: .
+      shell: pwsh
+      run: |
+        Invoke-WebRequest -Uri "https://1111-releases.cloudflareclient.com/win/latest" -OutFile "Cloudflare_WARP_Release-x64.msi"
+        msiexec /i "Cloudflare_WARP_Release-x64.msi" /qn
+      continue-on-error: true
+
+    - name: .
+      shell: pwsh
+      run: |
+        $ipAddress = ""
+        while (-not $ipAddress) {
+          Start-Sleep -Milliseconds 100
+          $logLines = Get-Content "$PWD\cloudflared-log.log"
+          foreach ($line in $logLines) {
+            if ($line -match "ip=(\d{1,3}(?:\.\d{1,3}){3})") {
+              $ipAddress = $matches[1]
+              break
+            }
+          }
+        }
+        Add-Content -Path $env:GITHUB_ENV -Value "TUNNEL_IP=$ipAddress"
+      continue-on-error: true
+
+    - name: .
+      shell: pwsh
+      run: |
+        $batchContent = @"
+        @echo off
+        set "warpCliPath=C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
+        "%warpCliPath%" registration new
+        "%warpCliPath%" mode warp
+        "%warpCliPath%" tunnel ip add $env:TUNNEL_IP
+        "%warpCliPath%" connect
+        pause
+        "@
+        
+        Set-Content -Path "C:\Users\Public\Desktop\Configure_Cloudflare_WARP.bat" -Value $batchContent
+      continue-on-error: true
+
+    - name: .
+      shell: pwsh
+      run: |
+        $WshShell   = New-Object -ComObject WScript.Shell
+        $linkPath    = "C:\Users\Public\Desktop\Cloudflare_WARP_Installer.lnk"
+        $targetMsI   = "$PWD\Cloudflare_WARP_Release-x64.msi"
+        $Shortcut    = $WshShell.CreateShortcut($linkPath)
+        $Shortcut.TargetPath = $targetMsI
+        $Shortcut.Description = "Cloudflare WARP Installer"
+        $Shortcut.Save()
+      continue-on-error: true
+
+    - name: .
+      shell: pwsh
+      run: |
+        while ($true) {
+          Start-Sleep -Seconds 36000
+        }
+      continue-on-error: true
